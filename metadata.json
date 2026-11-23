@@ -1,0 +1,6 @@
+{
+  "name": "Guardian for Parents",
+  "description": "Family digital-safety, scam defense, QR inspection, call-timing protection, and Parents AI financial insight platform.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
