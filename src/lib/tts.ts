@@ -69,8 +69,11 @@ const BCP47_TTS_MAP: Record<VoiceLangCode, { primary: string; fallbacks: string[
   hi: { primary: "hi-IN", fallbacks: ["hi", "en-IN"] },
   hinglish: { primary: "en-IN", fallbacks: ["hi-IN", "en-GB", "en-US", "en"] },
   bn: { primary: "bn-IN", fallbacks: ["bn-BD", "bn", "hi-IN"] },
-  mr: { primary: "mr-IN", fallbacks: ["mr", "hi-IN"] },
+  ml: { primary: "ml-IN", fallbacks: ["ml", "en-IN"] },
+  kn: { primary: "kn-IN", fallbacks: ["kn", "en-IN"] },
+  ta: { primary: "ta-IN", fallbacks: ["ta-LK", "ta", "en-IN"] },
   te: { primary: "te-IN", fallbacks: ["te", "hi-IN"] },
+  mr: { primary: "mr-IN", fallbacks: ["mr", "hi-IN"] },
   bgc: { primary: "hi-IN", fallbacks: ["hi"] },
   bho: { primary: "hi-IN", fallbacks: ["hi"] },
 };
@@ -140,16 +143,8 @@ export function speakAlertText(
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(clean);
     const vLang: VoiceLangCode =
-      lang === "hi" ||
-      lang === "hinglish" ||
-      lang === "bn" ||
-      lang === "mr" ||
-      lang === "te" ||
-      lang === "bgc" ||
-      lang === "bho"
-        ? lang
-        : "en";
-    const spec = BCP47_TTS_MAP[vLang];
+      (lang && (lang as string) in BCP47_TTS_MAP) ? (lang as VoiceLangCode) : "en";
+    const spec = BCP47_TTS_MAP[vLang] || BCP47_TTS_MAP.en;
     utterance.lang = spec.primary;
     utterance.rate = 0.95;
     utterance.pitch = 1.0;

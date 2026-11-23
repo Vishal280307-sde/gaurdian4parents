@@ -91,10 +91,15 @@ const VOICE_QUICK_PROMPTS: {
   },
 ];
 
-const QUICK_VOICE_LANGS: { code: VoiceLangCode; label: string }[] = [
-  { code: "en", label: "English" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "hinglish", label: "Hinglish" },
+const QUICK_VOICE_LANGS: { code: VoiceLangCode; label: string; badge: string }[] = [
+  { code: "en", label: "English", badge: "EN" },
+  { code: "hi", label: "हिन्दी", badge: "हिं" },
+  { code: "bn", label: "বাংলা", badge: "বাং" },
+  { code: "ml", label: "മലയാളം", badge: "മല" },
+  { code: "kn", label: "ಕನ್ನಡ", badge: "ಕನ್" },
+  { code: "ta", label: "தமிழ்", badge: "தமி" },
+  { code: "te", label: "తెలుగు", badge: "తె" },
+  { code: "hinglish", label: "Hinglish", badge: "HiEn" },
 ];
 
 export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
@@ -291,6 +296,7 @@ export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
               method: "POST",
               body: JSON.stringify({
                 audioBase64: base64Audio,
+                base64Audio,
                 mimeType: finalMime,
                 voiceLang,
               }),
@@ -549,7 +555,7 @@ export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
           voiceLang,
           provider: aiProvider,
           history: [...history, userMsg]
-            .slice(-6)
+            .slice(-12)
             .map((h) => ({ role: h.role, text: h.text })),
           guardianContext: intelContext || undefined,
         }),
@@ -690,7 +696,7 @@ export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
                   <span className="truncate">{langOption.nativeName}</span>
                 </span>
                 <span className="text-[11px] font-bold text-[#C6A15B] shrink-0">
-                  {uiLang === "hi" ? "सभी 8 भाषाएं" : "All 8"}
+                  {uiLang === "hi" ? "सभी भाषाएं" : "All Languages"}
                 </span>
               </button>
             </div>

@@ -1,7 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 export type AiProviderId = "gemini" | "guardian";
-export type VoiceLangCode = "en" | "hi" | "hinglish" | "bn" | "mr" | "te" | "bgc" | "bho";
+export type VoiceLangCode =
+  | "en"
+  | "hi"
+  | "hinglish"
+  | "bn"
+  | "ml"
+  | "kn"
+  | "ta"
+  | "te"
+  | "mr"
+  | "bgc"
+  | "bho";
+
 export type VoiceNavTarget =
   | "overview"
   | "scam_qr"
@@ -37,28 +49,57 @@ export class GeminiServiceError extends Error {
   }
 }
 
-export const GEMINI_TEXT_MODEL = "gemini-4-hydrogen";
-export const GEMINI_TRANSCRIBE_MODEL = "gemini-3.5-transcribe";
+export const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+export const GEMINI_TRANSCRIBE_MODEL =
+  process.env.GEMINI_TRANSCRIBE_MODEL || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+export const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 
 const LANGUAGE_INSTRUCTIONS: Record<VoiceLangCode, string> = {
   en: "simple, clear, reassuring English suitable for parents and elderly users",
-  hi: "Hindi (natural Devanagari script, simple respectful tone)",
+  hi: "Hindi (natural Devanagari script हिन्दी, simple, warm, and respectful tone)",
   hinglish: "natural Hinglish (friendly conversational mix of Hindi in Roman script and simple English, easy for Indian parents to read and hear)",
   bn: "Bengali (natural Bengali script বাংলা, simple respectful tone)",
+  ml: "Malayalam (natural Malayalam script മലയാളം, simple, warm, and respectful tone)",
+  kn: "Kannada (natural Kannada script ಕನ್ನಡ, simple, warm, and respectful tone)",
+  ta: "Tamil (natural Tamil script தமிழ், simple, warm, and respectful tone)",
+  te: "Telugu (natural Telugu script తెలుగు, clear, warm, and respectful tone)",
   mr: "Marathi (natural Devanagari script मराठी, simple respectful tone)",
-  te: "Telugu as spoken in Andhra Pradesh (natural Telugu script తెలుగు, clear respectful tone)",
   bgc: "Haryanvi written cleanly in Devanagari script, warm and easy to understand for elders",
   bho: "Bhojpuri / Bihari written cleanly in Devanagari script, warm and easy to understand for elders",
 };
 
-export function normalizeVoiceLang(lang?: string): VoiceLangCode {
+export function detectLanguageFromText(text: string): VoiceLangCode | null {
+  if (!text) return null;
+  if (/[\u0D00-\u0D7F]/.test(text)) return "ml"; // Malayalam
+  if (/[\u0C80-\u0CFF]/.test(text)) return "kn"; // Kannada
+  if (/[\u0B80-\u0BFF]/.test(text)) return "ta"; // Tamil
+  if (/[\u0C00-\u0C7F]/.test(text)) return "te"; // Telugu
+  if (/[\u0980-\u09FF]/.test(text)) return "bn"; // Bengali
+  if (/[\u0900-\u097F]/.test(text)) return "hi"; // Devanagari (Hindi)
+  if (/\b(kya|kaise|batao|karo|nahi|paise|rupaye|mera|aap|hoga|mujhe|dhokha|bheja|khata|bataiye)\b/i.test(text)) {
+    return "hinglish";
+  }
+  return null;
+}
+
+export function normalizeVoiceLang(lang?: string, textHint?: string): VoiceLangCode {
+  if (textHint) {
+    const detected = detectLanguageFromText(textHint);
+    if (detected && (!lang || lang === "en")) {
+      return detected;
+    }
+  }
   const clean = String(lang || "en").trim().toLowerCase();
   if (
     clean === "hi" ||
     clean === "hinglish" ||
     clean === "bn" ||
-    clean === "mr" ||
+    clean === "ml" ||
+    clean === "kn" ||
+    clean === "ta" ||
     clean === "te" ||
+    clean === "mr" ||
     clean === "bgc" ||
     clean === "bho"
   ) {
@@ -202,6 +243,37 @@ async function withGeminiTimeoutAndRetry<T>(
   throw mapGeminiError(lastErr);
 }
 
+export async function generateContentWithModelFallback(
+  ai: GoogleGenAI,
+  preferredModel: string,
+  params: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
+  options: { timeoutMs?: number; maxRetries?: number } = {}
+) {
+  const modelsToTry = Array.from(new Set([preferredModel, ...FALLBACK_MODELS].filter(Boolean)));
+  let lastErr: unknown;
+  for (let i = 0; i < modelsToTry.length; i += 1) {
+    const candidateModel = modelsToTry[i];
+    try {
+      return await withGeminiTimeoutAndRetry(
+        () => ai.models.generateContent({ ...params, model: candidateModel }),
+        options
+      );
+    } catch (err) {
+      lastErr = err;
+      const mapped = mapGeminiError(err);
+      const isLast = i === modelsToTry.length - 1;
+      if (
+        !isLast &&
+        (mapped.code === "GEMINI_MODEL_UNAVAILABLE" || mapped.statusCode === 404 || mapped.statusCode === 502)
+      ) {
+        continue;
+      }
+      throw mapped;
+    }
+  }
+  throw mapGeminiError(lastErr);
+}
+
 export function redactSensitive(text: string): string {
   return String(text || "")
     .replace(/\b\d{4,16}\b/g, "[NUMBER]")
@@ -310,6 +382,39 @@ const LOCAL_NAV_CONFIRM: Record<VoiceLangCode, Record<Exclude<VoiceNavTarget, nu
     emergency_call: "అత్యవసర బ్యాంక్ కాల్ సహాయం తెరుస్తున్నాను.",
     live_qr: "లైవ్ కెమెరా QR స్కానర్ తెరుస్తున్నాను.",
   },
+  ml: {
+    overview: "നിങ്ങളുടെ ഗാർഡിയൻ ഡാഷ്‌ബോർഡ് തുറക്കുന്നു.",
+    scam_qr: "ക്യുആർ & തട്ടിപ്പ് സന്ദേശ പരിശോധന തുറക്കുന്നു.",
+    cyber_check: "വ്യക്തിഗത സൈബർ സുരക്ഷാ പരിശോധന തുറക്കുന്നു.",
+    calls_links: "ഫോൺ തട്ടിപ്പ്, കോൾ സുരക്ഷ തുറക്കുന്നു.",
+    awareness: "സൈബർ ബോധവൽക്കരണ കേന്ദ്രം തുറക്കുന്നു.",
+    approvals: "കുടുംബ അനുമതികളും ക്രമീകരണങ്ങളും തുറക്കുന്നു.",
+    parents_ai: "പേരെന്റ്സ് എഐ തുറക്കുന്നു.",
+    emergency_call: "അടിയന്തര ബാങ്ക് കോൾ സഹായം ഉടൻ തുറക്കുന്നു.",
+    live_qr: "തത്സമയ ക്യാമറ ക്യുആർ സ്കാനർ തുറക്കുന്നു.",
+  },
+  kn: {
+    overview: "ನಿಮ್ಮ ಗಾರ್ಡಿಯನ್ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    scam_qr: "ಕ್ಯೂಆರ್ ಮತ್ತು ವಂಚನೆ ಸಂದೇಶ ಪರಿಶೀಲನೆ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    cyber_check: "ವೈಯಕ್ತಿಕ ಸೈಬರ್ ಸುರಕ್ಷತಾ ಪರಿಶೀಲನೆ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    calls_links: "ಫೋನ್ ವಂಚನೆ ಮತ್ತು ಕರೆ ರಕ್ಷಣೆ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    awareness: "ಸೈಬರ್ ಜಾಗೃತಿ ಕೇಂದ್ರ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    approvals: "ಕುಟುಂಬ ಅನುಮೋದನೆಗಳು ಮತ್ತು ಸೆಟ್ಟಿಂಗ್ಸ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    parents_ai: "ಪೇರೆಂಟ್ಸ್ ಎಐ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    emergency_call: "ತುರ್ತು ಬ್ಯಾಂಕ್ ಕರೆ ನೆರವು ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    live_qr: "ಲೈವ್ ಕ್ಯಾಮೆರಾ ಕ್ಯೂಆರ್ ಸ್ಕ್ಯಾನರ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+  },
+  ta: {
+    overview: "உங்கள் கார்டியன் டாஷ்போர்டு திறக்கப்படுகிறது.",
+    scam_qr: "க்யூஆர் மற்றும் மோசடி செய்தி சரிபார்ப்பு திறக்கப்படுகிறது.",
+    cyber_check: "தனிப்பட்ட சைபர் பாதுகாப்பு சரிபார்ப்பு திறக்கப்படுகிறது.",
+    calls_links: "தொலைபேசி மோசடி மற்றும் அழைப்பு பாதுகாப்பு திறக்கப்படுகிறது.",
+    awareness: "சைபர் விழிப்புணர்வு மையம் திறக்கப்படுகிறது.",
+    approvals: "குடும்ப ஒப்புதல்கள் மற்றும் அமைப்புகள் திறக்கப்படுகிறது.",
+    parents_ai: "பேரண்ட்ஸ் ஏஐ திறக்கப்படுகிறது.",
+    emergency_call: "அவசர வங்கி அழைப்பு உதவி திறக்கப்படுகிறது.",
+    live_qr: "நேரலை கேமரா க்யூஆர் ஸ்கேனர் திறக்கப்படுகிறது.",
+  },
   bgc: {
     overview: "आपका गार्जियन डैशबोर्ड खोल रहे हैं।",
     scam_qr: "QR और संदेश जांच वाला हिस्सा खोल रहे हैं।",
@@ -370,6 +475,24 @@ const LOCAL_SAFETY_ADVICE: Record<VoiceLangCode, { otpWarning: string; generalSa
       "వెంటనే ఆపండి. ఏ బ్యాంకు లేదా ప్రభుత్వ అధికారి ఎప్పుడూ OTP, UPI PIN లేదా డబ్బు అందుకోవడానికి QR స్కాన్ అడగరు. వివరాలు పంచుకున్నట్లయితే వెంటనే మీ బ్యాంకుకు కాల్ చేయండి లేదా 1930 కు డయల్ చేయండి.",
     generalSafe:
       "అత్యవసర చెల్లింపులు, తెలియని కాల్స్ లేదా లింకులపై చర్య తీసుకునే ముందు ఆగండి. మీ కుటుంబ సంరక్షకుడితో లేదా బ్యాంకు నంబర్‌తో నిర్ధారించుకోండి.",
+  },
+  ml: {
+    otpWarning:
+      "ഉടൻ നിർത്തുക. ബാങ്കുകളോ സർക്കാർ ഉദ്യോഗസ്ഥരോ പണം ലഭിക്കുന്നതിനായി ഒടിപിയോ, യുപിഐ പിന്നോ, ക്യുആർ സ്കാനോ ആവശ്യപ്പെടില്ല. വിവരങ്ങൾ നൽകിയിട്ടുണ്ടെങ്കിൽ ബാങ്കിനെ ബന്ധപ്പെടുക അല്ലെങ്കിൽ 1930 ഡയൽ ചെയ്യുക.",
+    generalSafe:
+      "അടിയന്തര പേയ്‌മെന്റ്, അജ്ഞാത കോളുകൾ എന്നിവയിൽ പ്രവർത്തിക്കുന്നതിന് മുമ്പ് സംയമനം പാലിക്കുക. കുടുംബാംഗങ്ങളോടോ ബാങ്കിലോ വിളിച്ച് ഉറപ്പാക്കുക.",
+  },
+  kn: {
+    otpWarning:
+      "ತಕ್ಷಣ ನಿಲ್ಲಿಸಿ. ಯಾವುದೇ ಬ್ಯಾಂಕ್ ಅಥವಾ ಸರ್ಕಾರಿ ಅಧಿಕಾರಿ ಹಣ ಪಡೆಯಲು ಒಟಿಪಿ, ಯುಪಿಐ ಪಿನ್ ಅಥವಾ ಕ್ಯೂಆರ್ ಸ್ಕ್ಯಾನ್ ಕೇಳುವುದಿಲ್ಲ. ಮಾಹಿತಿ ಹಂಚಿಕೊಂಡಿದ್ದರೆ ಕೂಡಲೇ ಬ್ಯಾಂಕ್ ಅಥವಾ 1930 ಗೆ ಕರೆ ಮಾಡಿ.",
+    generalSafe:
+      "ಯಾವುದೇ ತುರ್ತು ಪಾವತಿ, ಅಪರಿಚಿತ ಕರೆ ಅಥವಾ ಲಿಂಕ್ ಕ್ಲಿಕ್ ಮಾಡುವ ಮುನ್ನ ಎಚ್ಚರ ವಹಿಸಿ. ಕುಟುಂಬದ ಪೋಷಕರು ಅಥವಾ ಬ್ಯಾಂಕ್ ಜೊತೆ ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ.",
+  },
+  ta: {
+    otpWarning:
+      "உடனடியாக நிறுத்துங்கள். பணம் பெறுவதற்கு எந்த வங்கியும் அரசு அதிகாரியும் ஒருபோதும் OTP, UPI PIN அல்லது QR ஸ்கேன் கேட்க மாட்டார்கள். விவரங்களைப் பகிர்ந்திருந்தால் உடனடியாக வங்கிக்கு அழைக்கவும் அல்லது 1930 ஐ டயல் செய்யவும்.",
+    generalSafe:
+      "அவசர கட்டணம், தெரியாத அழைப்புகள் அல்லது இணைப்புகளை கிளிக் செய்வதற்கு முன் கவனமாக இருங்கள். குடும்ப பாதுகாவலர் அல்லது அதிகாரப்பூர்வ வங்கியில் உறுதிப்படுத்தவும்.",
   },
   bgc: {
     otpWarning:
@@ -522,21 +645,19 @@ export async function explainRiskWithGemini(params: {
       ? `${params.score}/100 (${params.riskLevel || params.level})`
       : `${params.level}`;
 
-  const response = await withGeminiTimeoutAndRetry(() =>
-    ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
-      contents: [
-        `Context type: ${params.contextType}`,
-        `Final deterministic suspicion score: ${scoreLine}`,
-        `Verification status: ${params.verificationStatus || params.level}`,
-        `Scored indicators:\n${indicatorsBlock}`,
-        `Actual detected findings: ${findingsBlock}`,
-        `Sources checked:\n${sourcesBlock}`,
-        `Unavailable sources (added 0 points): ${unavailableBlock}`,
-        `Redacted input snippet: ${safeText}`,
-      ].join("\n\n"),
-      config: {
-        systemInstruction: `You are a calm, trustworthy family digital-safety advisor helping parents understand scan results. Write in ${langLabel}.
+  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+    contents: [
+      `Context type: ${params.contextType}`,
+      `Final deterministic suspicion score: ${scoreLine}`,
+      `Verification status: ${params.verificationStatus || params.level}`,
+      `Scored indicators:\n${indicatorsBlock}`,
+      `Actual detected findings: ${findingsBlock}`,
+      `Sources checked:\n${sourcesBlock}`,
+      `Unavailable sources (added 0 points): ${unavailableBlock}`,
+      `Redacted input snippet: ${safeText}`,
+    ].join("\n\n"),
+    config: {
+      systemInstruction: `You are Guardian AI, a calm, trustworthy family digital-safety advisor helping parents understand scan results. Write in ${langLabel}.
 CRITICAL RULES:
 1. Refer ONLY to the actual deterministic score, scored indicators, findings, and source verification statuses provided above.
 2. NEVER change, override, or invent numeric suspicion scores, fraud reports, external blacklists, police cases, or call audio transcripts.
@@ -544,21 +665,20 @@ CRITICAL RULES:
 4. Clearly note that a score of 0 does NOT guarantee safety, and a high score indicates risk rather than proof of criminal activity.
 5. For phone-call screening, clarify that no call audio was listened to or recorded.
 6. Explain why the result received its exact score/risk level and give 2-4 practical safety steps. Never ask for OTPs, PINs, or passwords.`,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            explanation: { type: Type.STRING },
-            nextSteps: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          explanation: { type: Type.STRING },
+          nextSteps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
           },
-          required: ["explanation", "nextSteps"],
         },
+        required: ["explanation", "nextSteps"],
       },
-    })
-  );
+    },
+  });
 
   const rawText = (response.text || "").trim();
   if (!rawText) {
@@ -614,22 +734,32 @@ export function guardianSafetyAdvisorChat(params: {
 }
 
 function buildUnifiedGuardianSystemPrompt(langLabel: string, includeVoiceNav: boolean): string {
-  return `You are Guardian AI, a warm, calm, and authoritative family cybersecurity assistant for parents and elderly users in Guardian for Parents.
-Reply strictly in ${langLabel}.
+  return `You are Guardian AI, an intelligent, friendly and privacy-first digital safety assistant designed to protect Indian families against online scams, financial fraud, phishing, impersonation and social engineering.
+Your primary purpose is to help users understand risks and make safer decisions.
 
-STYLE & ACCESSIBILITY:
-- Use short, easy-to-read sentences suitable for parents and elderly users.
-- Use simple numbered steps (1., 2., 3.) whenever giving safety actions.
-- Cover practical guidance on QR scams, fake UPI collect/refund requests, suspicious calls, OTP fraud, phishing links, bank impersonation, fake job offers, payment safety, and reporting fraud via India's 1930 / cybercrime.gov.in.
+PERSONALITY:
+- Friendly and approachable.
+- Patient and respectful.
+- Intelligent and practical.
+- Calm during emergencies.
+- Easy to understand for parents and elderly users (never unnecessarily technical, never judgmental).
 
-STRICT SAFETY & GROUNDING RULES:
-1. Only cite Guardian scores, findings, and verification statuses actually present in the Guardian Intelligence Context below. Never invent suspicion scores, fake fraud reports, fake bank helpline numbers, or call audio transcripts.
-2. Note clearly when something is unverified or that a 0/100 score is not a safety guarantee.
-3. NEVER ask for OTPs, UPI PINs, banking passwords, CVVs, or full card numbers, and NEVER execute payments or financial actions.
+COMMUNICATION & GROUNDING RULES:
+1. Respond in ${langLabel}. If the user communicates in a specific Indian language or dialect (English, Hindi, Bengali, Malayalam, Kannada, Tamil, Telugu, or Hinglish), match that language naturally.
+2. Keep answers concise (usually 2 to 4 clear, supportive sentences or a compact numbered list 1., 2., 3.) unless more detail is requested.
+3. Explain technical risks in everyday language. Give actionable, practical safety steps.
+4. Distinguish verified intelligence from heuristic/unverified indicators. Refer only to actual Guardian Intelligence Context provided. Never invent scores, blacklist records, police cases, or call audio transcripts.
+5. NEVER ask users to share OTPs, UPI PINs, passwords, CVVs, or full card numbers, and NEVER claim you have blocked a transaction or called a bank unless that action was executed by an authorized system.
+6. Clearly note that a 0/100 score is not a 100% safety guarantee, and a high score is an indicator of risk.
+7. For phone screening, clarify that zero call audio was listened to or recorded.
+8. If the user appears to be facing an active scam or emergency, provide immediate practical steps: stop payment, block contact, open Bank Emergency Assistance, or dial India's cybercrime helpline 1930.
 ${
   includeVoiceNav
-    ? `4. Return JSON with fields "reply", "spokenReply" (concise plain text suitable for read-aloud without markdown symbols), and "navigateTo". Set "navigateTo" to one of ["overview","scam_qr","cyber_check","calls_links","awareness","approvals","parents_ai","emergency_call","live_qr"] ONLY if the user clearly asks to open/visit that screen, else "".`
-    : `4. Keep replies clear, supportive, and focused (usually 2–5 short sentences or a compact numbered list).`
+    ? `9. Return valid JSON with fields:
+- "reply": string (complete Markdown response for display)
+- "spokenReply": string (plain conversational text for text-to-speech, concise, without markdown symbols, asterisks, or URLs)
+- "navigateTo": string (one of ["overview","scam_qr","cyber_check","calls_links","awareness","approvals","parents_ai","emergency_call","live_qr"] ONLY if user asks to open that view, else "")`
+    : `9. Use clear markdown formatting suitable for clean chat display.`
 }`;
 }
 
@@ -642,20 +772,22 @@ export async function chatWithGemini(params: {
   guardianContext?: GuardianIntelContextInput | null;
 }): Promise<{ text: string; providerUsed: AiProviderId; navigateTo: VoiceNavTarget }> {
   const localNav = detectVoiceNavigationIntent(params.message);
-  if (params.provider === "guardian") {
+  const vLang = normalizeVoiceLang(params.lang, params.message);
+
+  if (params.provider === "guardian" || !isGeminiConfigured()) {
     return {
       text: guardianSafetyAdvisorChat({
         message: params.message,
         signals: params.signals,
-        lang: params.lang,
+        lang: vLang,
         guardianContext: params.guardianContext,
       }),
       providerUsed: "guardian",
       navigateTo: localNav,
     };
   }
+
   const ai = getAiClient();
-  const vLang = normalizeVoiceLang(params.lang);
   const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
   const recentHistory = params.history
     .slice(-8)
@@ -663,21 +795,18 @@ export async function chatWithGemini(params: {
     .join("\n");
   const contextBlock = buildGuardianContextBlock(params.guardianContext, params.signals);
 
-  const response = await withGeminiTimeoutAndRetry(() =>
-    ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
-      contents: [
-        `Guardian Intelligence Context:\n${contextBlock}`,
-        recentHistory ? `Recent conversation:\n${recentHistory}` : "",
-        `User message: ${redactSensitive(params.message)}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      config: {
-        systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, false),
-      },
-    })
-  );
+  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+    contents: [
+      `Guardian Intelligence Context:\n${contextBlock}`,
+      recentHistory ? `Recent conversation:\n${recentHistory}` : "",
+      `User message: ${redactSensitive(params.message)}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    config: {
+      systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, false),
+    },
+  });
 
   const text = (response.text || "").trim();
   if (!text) {
@@ -709,11 +838,11 @@ export async function voiceAssist(params: {
   providerUsed: AiProviderId;
   languageCode: VoiceLangCode;
 }> {
-  const vLang = normalizeVoiceLang(params.voiceLang);
+  const vLang = normalizeVoiceLang(params.voiceLang, params.transcript);
   const safeTranscript = redactSensitive(params.transcript).slice(0, 800);
   const localNav = detectVoiceNavigationIntent(safeTranscript);
 
-  if (params.provider === "guardian") {
+  if (params.provider === "guardian" || !isGeminiConfigured()) {
     if (localNav) {
       const navText = LOCAL_NAV_CONFIRM[vLang][localNav];
       return {
@@ -747,32 +876,29 @@ export async function voiceAssist(params: {
     .join("\n");
   const contextBlock = buildGuardianContextBlock(params.guardianContext, params.contextSignals || []);
 
-  const response = await withGeminiTimeoutAndRetry(() =>
-    ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
-      contents: [
-        `Selected voice language: ${vLang} (${langLabel})`,
-        `Guardian Intelligence Context:\n${contextBlock}`,
-        recentHistory ? `Recent conversation:\n${recentHistory}` : "",
-        `User spoken/typed input: ${safeTranscript}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      config: {
-        systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, true),
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            reply: { type: Type.STRING },
-            spokenReply: { type: Type.STRING },
-            navigateTo: { type: Type.STRING },
-          },
-          required: ["reply", "spokenReply", "navigateTo"],
+  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+    contents: [
+      `Selected voice language: ${vLang} (${langLabel})`,
+      `Guardian Intelligence Context:\n${contextBlock}`,
+      recentHistory ? `Recent conversation:\n${recentHistory}` : "",
+      `User spoken/typed input: ${safeTranscript}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    config: {
+      systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, true),
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          reply: { type: Type.STRING },
+          spokenReply: { type: Type.STRING },
+          navigateTo: { type: Type.STRING },
         },
+        required: ["reply", "spokenReply", "navigateTo"],
       },
-    })
-  );
+    },
+  });
 
   const rawText = (response.text || "").trim();
   if (!rawText) {
@@ -862,24 +988,24 @@ export async function transcribeAudioWithGemini(params: {
         ? "Expected language: Hinglish (Hindi/English mix)."
         : `Expected language hint: ${LANGUAGE_INSTRUCTIONS[vLang]}.`;
 
-  const response = await withGeminiTimeoutAndRetry(
-    () =>
-      ai.models.generateContent({
-        model: GEMINI_TRANSCRIBE_MODEL,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: cleanMime,
-                data: params.base64Audio,
-              },
+  const response = await generateContentWithModelFallback(
+    ai,
+    GEMINI_TRANSCRIBE_MODEL,
+    {
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: cleanMime,
+              data: params.base64Audio,
             },
-            {
-              text: `Transcribe the spoken audio accurately into plain text only (no commentary or timestamps). ${langHint}`,
-            },
-          ],
-        },
-      }),
+          },
+          {
+            text: `Transcribe the spoken audio accurately into plain text only (no commentary, markdown, or timestamps). ${langHint}`,
+          },
+        ],
+      },
+    },
     { timeoutMs: 22_000, maxRetries: 1 }
   );
 
@@ -900,24 +1026,21 @@ export async function extractScreenshotTextWithGemini(params: {
   mimeType: string;
 }): Promise<{ extractedText: string }> {
   const ai = getAiClient();
-  const response = await withGeminiTimeoutAndRetry(() =>
-    ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: params.mimeType,
-              data: params.base64Data,
-            },
+  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: params.mimeType,
+            data: params.base64Data,
           },
-          {
-            text: "Transcribe all visible SMS, WhatsApp, or payment alert text from this screenshot accurately. Return only the extracted message text without extra commentary.",
-          },
-        ],
-      },
-    })
-  );
+        },
+        {
+          text: "Transcribe all visible SMS, WhatsApp, or payment alert text from this screenshot accurately. Return only the extracted message text without extra commentary.",
+        },
+      ],
+    },
+  });
   return {
     extractedText: (response.text || "").trim(),
   };

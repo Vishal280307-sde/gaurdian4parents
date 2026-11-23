@@ -12,13 +12,25 @@ import {
   voiceAssist,
 } from "./ai.ts";
 
-test("1. normalizeVoiceLang accepts hinglish and falls back cleanly for unknown codes", () => {
+test("1. normalizeVoiceLang accepts all seven languages, hinglish, and auto-detects from text", () => {
   assert.equal(normalizeVoiceLang("hinglish"), "hinglish");
   assert.equal(normalizeVoiceLang("hi"), "hi");
   assert.equal(normalizeVoiceLang("en"), "en");
   assert.equal(normalizeVoiceLang("bn"), "bn");
+  assert.equal(normalizeVoiceLang("ml"), "ml");
+  assert.equal(normalizeVoiceLang("kn"), "kn");
+  assert.equal(normalizeVoiceLang("ta"), "ta");
+  assert.equal(normalizeVoiceLang("te"), "te");
   assert.equal(normalizeVoiceLang("INVALID_CODE"), "en");
   assert.equal(normalizeVoiceLang(undefined), "en");
+
+  // Script auto-detection when lang is undefined or 'en'
+  assert.equal(normalizeVoiceLang(undefined, "ഇത് സുരക്ഷിതമാണോ?"), "ml");
+  assert.equal(normalizeVoiceLang("en", "ಇದು ಸುರಕ್ಷಿತವೇ?"), "kn");
+  assert.equal(normalizeVoiceLang("en", "இது பாதுகாப்பானதா?"), "ta");
+  assert.equal(normalizeVoiceLang("en", "ఇది సురక్షితమేనా?"), "te");
+  assert.equal(normalizeVoiceLang("en", "এটা কি নিরাপদ?"), "bn");
+  assert.equal(normalizeVoiceLang("en", "क्या यह सुरक्षित है?"), "hi");
 });
 
 test("2. mapGeminiError cleanly converts raw @google/genai 503/429/auth/timeout/network failures", () => {

@@ -3335,7 +3335,7 @@ export function createApp() {
         res.status(429).json({ error: "Too many voice transcription requests. Please wait a minute.", code: "RATE_LIMIT" });
         return;
       }
-      const base64Audio = String(req.body?.base64Audio || "");
+      const base64Audio = String(req.body?.base64Audio || req.body?.audioBase64 || "");
       const mimeType = String(req.body?.mimeType || "");
       const voiceLang = String(req.body?.voiceLang || req.body?.lang || "en");
       if (!base64Audio || base64Audio.length > 7_500_000) {

@@ -352,7 +352,7 @@ export default function App() {
 
     const historyForApi = aiChatMessages
       .filter((m) => !m.isError)
-      .slice(-8)
+      .slice(-12)
       .map((m) => ({ role: m.role, text: m.text }));
 
     const userMsg: UnifiedChatMessage = {
@@ -1318,12 +1318,17 @@ export default function App() {
                     />
 
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
                         {(
                           [
                             { code: "en", label: "EN" },
                             { code: "hi", label: "हिन्दी" },
-                            { code: "hinglish", label: "Hinglish" },
+                            { code: "bn", label: "বাং" },
+                            { code: "ml", label: "മല" },
+                            { code: "kn", label: "ಕನ್" },
+                            { code: "ta", label: "தமி" },
+                            { code: "te", label: "తె" },
+                            { code: "hinglish", label: "HiEn" },
                           ] as { code: VoiceLangCode; label: string }[]
                         ).map((opt) => (
                           <button

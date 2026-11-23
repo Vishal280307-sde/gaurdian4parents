@@ -9,7 +9,18 @@ export type TabKey =
   | "approvals"
   | "parents_ai";
 export type LangCode = "en" | "hi";
-export type VoiceLangCode = "en" | "hi" | "hinglish" | "bn" | "mr" | "te" | "bgc" | "bho";
+export type VoiceLangCode =
+  | "en"
+  | "hi"
+  | "hinglish"
+  | "bn"
+  | "ml"
+  | "kn"
+  | "ta"
+  | "te"
+  | "mr"
+  | "bgc"
+  | "bho";
 export type AiProviderId = "gemini" | "guardian";
 export type VoiceNavTarget =
   | "overview"
