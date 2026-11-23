@@ -35,8 +35,13 @@ export async function apiFetch<T>(url: string, options: ApiFetchOptions = {}): P
     else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
   }
 
+  const rawBase = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  const targetUrl = url.startsWith("http://") || url.startsWith("https://")
+    ? url
+    : `${rawBase}${url.startsWith("/") ? "" : "/"}${url}`;
+
   try {
-    const res = await fetch(url, {
+    const res = await fetch(targetUrl, {
       ...fetchOpts,
       headers,
       signal: controller.signal,
@@ -45,6 +50,12 @@ export async function apiFetch<T>(url: string, options: ApiFetchOptions = {}): P
 
     const data = (await res.json().catch(() => ({}))) as T & { error?: string };
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error(
+          data.error ||
+            `API endpoint not found (404). Please ensure the Guardian backend server is running and VITE_API_BASE_URL is configured properly.`
+        );
+      }
       throw new Error(data.error || `Request failed (${res.status})`);
     }
     return data;

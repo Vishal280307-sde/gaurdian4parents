@@ -314,8 +314,63 @@ export async function getActiveLinkedParentIds(guardianId: string): Promise<stri
 }
 
 export async function seedInitialDemoUsersIfEmpty(): Promise<void> {
-  // Strictly disabled in production or unless ENABLE_DEMO_ACCOUNTS="true"
-  if (process.env.NODE_ENV === "production" || process.env.ENABLE_DEMO_ACCOUNTS !== "true") {
+  const shouldSeed =
+    process.env.ENABLE_DEMO_ACCOUNTS === "true" ||
+    process.env.NODE_ENV !== "production";
+  if (!shouldSeed) {
     return;
+  }
+
+  const existingParent = (await db
+    .prepare("SELECT id FROM users WHERE username = 'ramesh_parent'")
+    .get()) as { id: string } | undefined;
+
+  let parentId = existingParent?.id;
+  const now = Date.now();
+
+  if (!existingParent) {
+    parentId = generateId("usr");
+    const recCode = "GRD-PARENT-DEMO";
+    await db
+      .prepare(
+        `INSERT INTO users (id, username, name, role, gender, password_hash, recovery_code_hash, created_at)
+         VALUES (?, 'ramesh_parent', 'Ramesh Kulkarni', 'parent', 'male', ?, ?, ?)`
+      )
+      .run(parentId, hashSecret("GuardianPreview!2026"), hashSecret(recCode), now);
+    await ensureDefaultConsent(parentId);
+    await ensureDefaultQrNotificationPrefs(parentId);
+  }
+
+  const existingGuardian = (await db
+    .prepare("SELECT id FROM users WHERE username = 'ananya_guardian'")
+    .get()) as { id: string } | undefined;
+
+  let guardianId = existingGuardian?.id;
+
+  if (!existingGuardian) {
+    guardianId = generateId("usr");
+    const recCode = "GRD-GUARD-DEMO";
+    await db
+      .prepare(
+        `INSERT INTO users (id, username, name, role, gender, password_hash, recovery_code_hash, created_at)
+         VALUES (?, 'ananya_guardian', 'Ananya Kulkarni', 'guardian', 'female', ?, ?, ?)`
+      )
+      .run(guardianId, hashSecret("GuardianPreview!2026"), hashSecret(recCode), now);
+  }
+
+  if (parentId && guardianId) {
+    const existingLink = await db
+      .prepare(
+        "SELECT id FROM guardian_links WHERE parent_id = ? AND guardian_id = ? AND status = 'active'"
+      )
+      .get(parentId, guardianId);
+    if (!existingLink) {
+      await db
+        .prepare(
+          `INSERT INTO guardian_links (id, parent_id, guardian_id, invite_code, status, is_secondary, created_at, verified_at)
+           VALUES (?, ?, ?, ?, 'active', 0, ?, ?)`
+        )
+        .run(generateId("lnk"), parentId, guardianId, "DEMO-INVITE-2026", now, now);
+    }
   }
 }

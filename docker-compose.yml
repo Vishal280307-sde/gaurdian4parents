@@ -1,0 +1,15 @@
+services:
+  guardian:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - ENABLE_DEMO_ACCOUNTS=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - guardian-data:/app/data
+
+volumes:
+  guardian-data:

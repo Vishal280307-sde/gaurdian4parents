@@ -197,6 +197,8 @@ function getAllowedCorsOrigins(): Set<string> {
   const origins = new Set<string>([
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
     "https://localhost",
     "capacitor://localhost",
   ]);
@@ -233,7 +235,8 @@ export function createApp() {
         isSameHostOrigin = false;
       }
     }
-    if (origin && (allowedOrigins.has(origin) || isSameHostOrigin)) {
+    const allowAny = allowedOrigins.has("*") || process.env.CORS_ORIGINS === "*" || process.env.NODE_ENV !== "production";
+    if (origin && (allowAny || allowedOrigins.has(origin) || isSameHostOrigin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -290,8 +293,8 @@ export function createApp() {
   app.post(
     "/api/auth/preview-family",
     asyncHandler(async (req, res) => {
-      if (process.env.NODE_ENV === "production") {
-        res.status(403).json({ error: "Preview family generator is disabled in production." });
+      if (process.env.NODE_ENV === "production" && process.env.ENABLE_DEMO_ACCOUNTS !== "true") {
+        res.status(403).json({ error: "Preview family generator is disabled in production unless ENABLE_DEMO_ACCOUNTS=true." });
         return;
       }
       const role = req.body?.role === "guardian" ? "guardian" : "parent";
@@ -3413,7 +3416,7 @@ async function startServer() {
     const distDir = path.resolve(__dirname, "dist");
     const indexHtmlPath = path.join(distDir, "index.html");
     app.use(express.static(distDir));
-    app.get("/{*path}", (_req, res) => {
+    app.get("*", (_req, res) => {
       if (fs.existsSync(indexHtmlPath)) {
         res.sendFile(indexHtmlPath);
       } else {

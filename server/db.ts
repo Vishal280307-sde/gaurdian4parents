@@ -14,14 +14,40 @@ export class DbNotConfiguredError extends Error {
 let sqliteInstance: DatabaseSync | null = null;
 
 function resolveDbPath(): string {
+  if (process.env.VERCEL) {
+    const tmpDir = path.resolve("/tmp");
+    if (!fs.existsSync(tmpDir)) {
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      } catch {
+        return ":memory:";
+      }
+    }
+    return path.join(tmpDir, "guardian.db");
+  }
+
   const configured = (process.env.GUARDIAN_DB_PATH || "./data/guardian.db").trim();
   if (configured === ":memory:") return ":memory:";
-  const resolved = path.resolve(process.cwd(), configured);
-  const dir = path.dirname(resolved);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+
+  try {
+    const resolved = path.resolve(process.cwd(), configured);
+    const dir = path.dirname(resolved);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return resolved;
+  } catch {
+    // If working directory is read-only, fallback to /tmp
+    const tmpDir = path.resolve("/tmp");
+    try {
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+      return path.join(tmpDir, path.basename(configured) || "guardian.db");
+    } catch {
+      return ":memory:";
+    }
   }
-  return resolved;
 }
 
 function getSqlite(): DatabaseSync {
