@@ -49,11 +49,17 @@ export class GeminiServiceError extends Error {
   }
 }
 
-export const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+export const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 export const GEMINI_TRANSCRIBE_MODEL =
-  process.env.GEMINI_TRANSCRIBE_MODEL || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  process.env.GEMINI_TRANSCRIBE_MODEL || process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
-export const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+export const FALLBACK_MODELS = [
+  "gemini-1.5-flash",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-pro",
+];
 
 const LANGUAGE_INSTRUCTIONS: Record<VoiceLangCode, string> = {
   en: "simple, clear, reassuring English suitable for parents and elderly users",
@@ -249,7 +255,8 @@ export async function generateContentWithModelFallback(
   params: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
   options: { timeoutMs?: number; maxRetries?: number } = {}
 ) {
-  const modelsToTry = Array.from(new Set([preferredModel, ...FALLBACK_MODELS].filter(Boolean)));
+  const cleanPreferred = preferredModel ? preferredModel.replace(/^models\//, "") : "";
+  const modelsToTry = Array.from(new Set([cleanPreferred, ...FALLBACK_MODELS].filter(Boolean)));
   let lastErr: unknown;
   for (let i = 0; i < modelsToTry.length; i += 1) {
     const candidateModel = modelsToTry[i];
@@ -264,7 +271,14 @@ export async function generateContentWithModelFallback(
       const isLast = i === modelsToTry.length - 1;
       if (
         !isLast &&
-        (mapped.code === "GEMINI_MODEL_UNAVAILABLE" || mapped.statusCode === 404 || mapped.statusCode === 502)
+        (mapped.code === "GEMINI_MODEL_UNAVAILABLE" ||
+          mapped.code === "GEMINI_REQUEST_FAILED" ||
+          mapped.code === "GEMINI_QUOTA_EXCEEDED" ||
+          mapped.code === "GEMINI_HIGH_DEMAND" ||
+          mapped.statusCode === 404 ||
+          mapped.statusCode === 502 ||
+          mapped.statusCode === 429 ||
+          mapped.statusCode === 503)
       ) {
         continue;
       }
@@ -608,56 +622,58 @@ export async function explainRiskWithGemini(params: {
   findings?: string[];
   sourceChecks?: GroundedSourceSummary[];
 }): Promise<{ explanation: string; nextSteps: string[] }> {
-  if (params.provider === "guardian") {
+  if (params.provider === "guardian" || !isGeminiConfigured()) {
     return explainRiskLocally(params);
   }
-  const ai = getAiClient();
-  const safeText = redactSensitive(params.text).slice(0, 1200);
-  const vLang = normalizeVoiceLang(params.lang);
-  const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
 
-  const findingsBlock = (params.findings && params.findings.length ? params.findings : params.signals).join("; ") || "None";
-  const indicatorsBlock =
-    params.indicators && params.indicators.length
-      ? params.indicators
-          .map(
-            (ind) =>
-              `- ${ind.label} (+${ind.points} pts, ${ind.verified ? "verified" : "unverified"}, source=${ind.sourceName}): ${ind.evidence.join("; ")}`
-          )
-          .join("\n")
-      : "No scored suspicion indicators triggered.";
-  const sourcesBlock =
-    params.sourceChecks && params.sourceChecks.length
-      ? params.sourceChecks
-          .map(
-            (s) =>
-              `- ${s.sourceName}: status=${s.verificationStatus}, result=${s.result}${s.limitations ? `, limitation=${s.limitations}` : ""}`
-          )
-          .join("\n")
-      : "No external source lookup summary attached.";
-  const unavailableBlock =
-    params.sourcesUnavailable && params.sourcesUnavailable.length > 0
-      ? params.sourcesUnavailable.join(", ")
-      : "None";
+  try {
+    const ai = getAiClient();
+    const safeText = redactSensitive(params.text).slice(0, 1200);
+    const vLang = normalizeVoiceLang(params.lang);
+    const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
 
-  const scoreLine =
-    typeof params.score === "number"
-      ? `${params.score}/100 (${params.riskLevel || params.level})`
-      : `${params.level}`;
+    const findingsBlock = (params.findings && params.findings.length ? params.findings : params.signals).join("; ") || "None";
+    const indicatorsBlock =
+      params.indicators && params.indicators.length
+        ? params.indicators
+            .map(
+              (ind) =>
+                `- ${ind.label} (+${ind.points} pts, ${ind.verified ? "verified" : "unverified"}, source=${ind.sourceName}): ${ind.evidence.join("; ")}`
+            )
+            .join("\n")
+        : "No scored suspicion indicators triggered.";
+    const sourcesBlock =
+      params.sourceChecks && params.sourceChecks.length
+        ? params.sourceChecks
+            .map(
+              (s) =>
+                `- ${s.sourceName}: status=${s.verificationStatus}, result=${s.result}${s.limitations ? `, limitation=${s.limitations}` : ""}`
+            )
+            .join("\n")
+        : "No external source lookup summary attached.";
+    const unavailableBlock =
+      params.sourcesUnavailable && params.sourcesUnavailable.length > 0
+        ? params.sourcesUnavailable.join(", ")
+        : "None";
 
-  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
-    contents: [
-      `Context type: ${params.contextType}`,
-      `Final deterministic suspicion score: ${scoreLine}`,
-      `Verification status: ${params.verificationStatus || params.level}`,
-      `Scored indicators:\n${indicatorsBlock}`,
-      `Actual detected findings: ${findingsBlock}`,
-      `Sources checked:\n${sourcesBlock}`,
-      `Unavailable sources (added 0 points): ${unavailableBlock}`,
-      `Redacted input snippet: ${safeText}`,
-    ].join("\n\n"),
-    config: {
-      systemInstruction: `You are Guardian AI, a calm, trustworthy family digital-safety advisor helping parents understand scan results. Write in ${langLabel}.
+    const scoreLine =
+      typeof params.score === "number"
+        ? `${params.score}/100 (${params.riskLevel || params.level})`
+        : `${params.level}`;
+
+    const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+      contents: [
+        `Context type: ${params.contextType}`,
+        `Final deterministic suspicion score: ${scoreLine}`,
+        `Verification status: ${params.verificationStatus || params.level}`,
+        `Scored indicators:\n${indicatorsBlock}`,
+        `Actual detected findings: ${findingsBlock}`,
+        `Sources checked:\n${sourcesBlock}`,
+        `Unavailable sources (added 0 points): ${unavailableBlock}`,
+        `Redacted input snippet: ${safeText}`,
+      ].join("\n\n"),
+      config: {
+        systemInstruction: `You are Guardian AI, a calm, trustworthy family digital-safety advisor helping parents understand scan results. Write in ${langLabel}.
 CRITICAL RULES:
 1. Refer ONLY to the actual deterministic score, scored indicators, findings, and source verification statuses provided above.
 2. NEVER change, override, or invent numeric suspicion scores, fraud reports, external blacklists, police cases, or call audio transcripts.
@@ -665,46 +681,50 @@ CRITICAL RULES:
 4. Clearly note that a score of 0 does NOT guarantee safety, and a high score indicates risk rather than proof of criminal activity.
 5. For phone-call screening, clarify that no call audio was listened to or recorded.
 6. Explain why the result received its exact score/risk level and give 2-4 practical safety steps. Never ask for OTPs, PINs, or passwords.`,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          explanation: { type: Type.STRING },
-          nextSteps: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            explanation: { type: Type.STRING },
+            nextSteps: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
           },
+          required: ["explanation", "nextSteps"],
         },
-        required: ["explanation", "nextSteps"],
       },
-    },
-  });
+    });
 
-  const rawText = (response.text || "").trim();
-  if (!rawText) {
-    throw new GeminiServiceError("Gemini returned an empty explanation. Please try again.", 502, "GEMINI_EMPTY_RESPONSE");
+    const rawText = (response.text || "").trim();
+    if (!rawText) {
+      return explainRiskLocally(params);
+    }
+
+    let parsed: { explanation?: string; nextSteps?: string[] };
+    try {
+      parsed = JSON.parse(rawText) as { explanation?: string; nextSteps?: string[] };
+    } catch {
+      parsed = { explanation: rawText, nextSteps: [] };
+    }
+
+    return {
+      explanation:
+        parsed.explanation?.trim() ||
+        (vLang === "hi"
+          ? "कृपया किसी भी कार्रवाई से पहले अपने परिवार के अभिभावक से सीधे पुष्टि करें।"
+          : "Please verify this request directly with your family guardian before acting."),
+      nextSteps:
+        Array.isArray(parsed.nextSteps) && parsed.nextSteps.length
+          ? parsed.nextSteps.slice(0, 4)
+          : vLang === "hi"
+            ? ["OTP या UPI PIN साझा न करें", "परिवार के अभिभावक से सहेजे गए नंबर पर पुष्टि करें"]
+            : ["Do not share OTP or PIN", "Verify with your family guardian on a saved number"],
+    };
+  } catch (err) {
+    console.warn("[explainRiskWithGemini] Gemini call failed, falling back to local explanation:", err);
+    return explainRiskLocally(params);
   }
-
-  let parsed: { explanation?: string; nextSteps?: string[] };
-  try {
-    parsed = JSON.parse(rawText) as { explanation?: string; nextSteps?: string[] };
-  } catch {
-    parsed = { explanation: rawText, nextSteps: [] };
-  }
-
-  return {
-    explanation:
-      parsed.explanation?.trim() ||
-      (vLang === "hi"
-        ? "कृपया किसी भी कार्रवाई से पहले अपने परिवार के अभिभावक से सीधे पुष्टि करें।"
-        : "Please verify this request directly with your family guardian before acting."),
-    nextSteps:
-      Array.isArray(parsed.nextSteps) && parsed.nextSteps.length
-        ? parsed.nextSteps.slice(0, 4)
-        : vLang === "hi"
-          ? ["OTP या UPI PIN साझा न करें", "परिवार के अभिभावक से सहेजे गए नंबर पर पुष्टि करें"]
-          : ["Do not share OTP or PIN", "Verify with your family guardian on a saved number"],
-  };
 }
 
 export function guardianSafetyAdvisorChat(params: {
@@ -787,41 +807,55 @@ export async function chatWithGemini(params: {
     };
   }
 
-  const ai = getAiClient();
-  const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
-  const recentHistory = params.history
-    .slice(-8)
-    .map((h) => `${h.role === "user" ? "User" : "Guardian AI"}: ${redactSensitive(h.text)}`)
-    .join("\n");
-  const contextBlock = buildGuardianContextBlock(params.guardianContext, params.signals);
+  try {
+    const ai = getAiClient();
+    const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
+    const recentHistory = params.history
+      .slice(-10)
+      .map((h) => `${h.role === "user" ? "User" : "Guardian AI"}: ${redactSensitive(h.text)}`)
+      .join("\n");
+    const contextBlock = buildGuardianContextBlock(params.guardianContext, params.signals);
 
-  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
-    contents: [
-      `Guardian Intelligence Context:\n${contextBlock}`,
-      recentHistory ? `Recent conversation:\n${recentHistory}` : "",
-      `User message: ${redactSensitive(params.message)}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    config: {
-      systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, false),
-    },
-  });
+    const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+      contents: [
+        `Guardian Intelligence Context:\n${contextBlock}`,
+        recentHistory ? `Recent conversation:\n${recentHistory}` : "",
+        `User message: ${redactSensitive(params.message)}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      config: {
+        systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, false),
+      },
+    });
 
-  const text = (response.text || "").trim();
-  if (!text) {
-    throw new GeminiServiceError(
-      "Gemini returned an empty reply. Please rephrase your question and try again.",
-      502,
-      "GEMINI_EMPTY_RESPONSE"
-    );
+    const text = (response.text || "").trim();
+    if (!text) {
+      throw new GeminiServiceError(
+        "Gemini returned an empty reply. Please rephrase your question and try again.",
+        502,
+        "GEMINI_EMPTY_RESPONSE"
+      );
+    }
+
+    return {
+      text,
+      providerUsed: "gemini",
+      navigateTo: localNav,
+    };
+  } catch (err) {
+    console.warn("[chatWithGemini] Gemini call failed, falling back to Guardian Safety Advisor:", err);
+    return {
+      text: guardianSafetyAdvisorChat({
+        message: params.message,
+        signals: params.signals,
+        lang: vLang,
+        guardianContext: params.guardianContext,
+      }),
+      providerUsed: "guardian",
+      navigateTo: localNav,
+    };
   }
-
-  return {
-    text,
-    providerUsed: "gemini",
-    navigateTo: localNav,
-  };
 }
 
 export async function voiceAssist(params: {
@@ -868,85 +902,112 @@ export async function voiceAssist(params: {
     };
   }
 
-  const ai = getAiClient();
-  const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
-  const recentHistory = (params.history || [])
-    .slice(-8)
-    .map((h) => `${h.role === "user" ? "User" : "Guardian AI"}: ${redactSensitive(h.text)}`)
-    .join("\n");
-  const contextBlock = buildGuardianContextBlock(params.guardianContext, params.contextSignals || []);
-
-  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
-    contents: [
-      `Selected voice language: ${vLang} (${langLabel})`,
-      `Guardian Intelligence Context:\n${contextBlock}`,
-      recentHistory ? `Recent conversation:\n${recentHistory}` : "",
-      `User spoken/typed input: ${safeTranscript}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    config: {
-      systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, true),
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          reply: { type: Type.STRING },
-          spokenReply: { type: Type.STRING },
-          navigateTo: { type: Type.STRING },
-        },
-        required: ["reply", "spokenReply", "navigateTo"],
-      },
-    },
-  });
-
-  const rawText = (response.text || "").trim();
-  if (!rawText) {
-    throw new GeminiServiceError(
-      "Gemini Voice AI returned an empty reply. Please try speaking or sending again.",
-      502,
-      "GEMINI_EMPTY_RESPONSE"
-    );
-  }
-
-  let parsed: { reply?: string; spokenReply?: string; navigateTo?: string } = {};
   try {
-    parsed = JSON.parse(rawText) as { reply?: string; spokenReply?: string; navigateTo?: string };
-  } catch {
-    parsed = {
-      reply: rawText,
-      spokenReply: rawText.replace(/[*_`#]/g, ""),
-      navigateTo: "",
+    const ai = getAiClient();
+    const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
+    const recentHistory = (params.history || [])
+      .slice(-10)
+      .map((h) => `${h.role === "user" ? "User" : "Guardian AI"}: ${redactSensitive(h.text)}`)
+      .join("\n");
+    const contextBlock = buildGuardianContextBlock(params.guardianContext, params.contextSignals || []);
+
+    const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+      contents: [
+        `Selected voice language: ${vLang} (${langLabel})`,
+        `Guardian Intelligence Context:\n${contextBlock}`,
+        recentHistory ? `Recent conversation:\n${recentHistory}` : "",
+        `User spoken/typed input: ${safeTranscript}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      config: {
+        systemInstruction: buildUnifiedGuardianSystemPrompt(langLabel, true),
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            reply: { type: Type.STRING },
+            spokenReply: { type: Type.STRING },
+            navigateTo: { type: Type.STRING },
+          },
+          required: ["reply", "spokenReply", "navigateTo"],
+        },
+      },
+    });
+
+    const rawText = (response.text || "").trim();
+    if (!rawText) {
+      throw new GeminiServiceError(
+        "Gemini Voice AI returned an empty reply. Please try speaking or sending again.",
+        502,
+        "GEMINI_EMPTY_RESPONSE"
+      );
+    }
+
+    let parsed: { reply?: string; spokenReply?: string; navigateTo?: string } = {};
+    try {
+      parsed = JSON.parse(rawText) as { reply?: string; spokenReply?: string; navigateTo?: string };
+    } catch {
+      parsed = {
+        reply: rawText,
+        spokenReply: rawText.replace(/[*_`#]/g, ""),
+        navigateTo: "",
+      };
+    }
+
+    const validNavs = new Set([
+      "overview",
+      "scam_qr",
+      "cyber_check",
+      "calls_links",
+      "awareness",
+      "approvals",
+      "parents_ai",
+      "emergency_call",
+      "live_qr",
+    ]);
+    const rawNav = String(parsed.navigateTo || "").trim();
+    const resolvedNav: VoiceNavTarget = validNavs.has(rawNav) ? (rawNav as VoiceNavTarget) : localNav;
+
+    const replyText = (parsed.reply || "").trim();
+    const spokenText = (parsed.spokenReply || replyText).replace(/[*_`#]/g, "").trim();
+    if (!replyText) {
+      throw new GeminiServiceError("Gemini returned no voice response text.", 502, "GEMINI_EMPTY_RESPONSE");
+    }
+
+    return {
+      reply: replyText,
+      spokenReply: spokenText || replyText,
+      navigateTo: resolvedNav,
+      providerUsed: "gemini",
+      languageCode: vLang,
+    };
+  } catch (err) {
+    console.warn("[voiceAssist] Gemini voice request failed, falling back to Guardian Safety Advisor:", err);
+    if (localNav) {
+      const navText = LOCAL_NAV_CONFIRM[vLang][localNav];
+      return {
+        reply: navText,
+        spokenReply: navText,
+        navigateTo: localNav,
+        providerUsed: "guardian",
+        languageCode: vLang,
+      };
+    }
+    const text = guardianSafetyAdvisorChat({
+      message: safeTranscript,
+      signals: params.contextSignals || [],
+      lang: vLang,
+      guardianContext: params.guardianContext,
+    });
+    return {
+      reply: text,
+      spokenReply: text,
+      navigateTo: null,
+      providerUsed: "guardian",
+      languageCode: vLang,
     };
   }
-
-  const validNavs = new Set([
-    "overview",
-    "scam_qr",
-    "cyber_check",
-    "calls_links",
-    "awareness",
-    "approvals",
-    "parents_ai",
-    "emergency_call",
-    "live_qr",
-  ]);
-  const rawNav = String(parsed.navigateTo || "").trim();
-  const resolvedNav: VoiceNavTarget = validNavs.has(rawNav) ? (rawNav as VoiceNavTarget) : localNav;
-
-  const replyText = (parsed.reply || "").trim();
-  const spokenText = (parsed.spokenReply || replyText).replace(/[*_`#]/g, "").trim();
-  if (!replyText) {
-    throw new GeminiServiceError("Gemini returned no voice response text.", 502, "GEMINI_EMPTY_RESPONSE");
-  }
-
-  return {
-    reply: replyText,
-    spokenReply: spokenText || replyText,
-    navigateTo: resolvedNav,
-    providerUsed: "gemini",
-    languageCode: vLang,
-  };
 }
 
 export async function transcribeAudioWithGemini(params: {

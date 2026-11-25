@@ -162,3 +162,23 @@ test("6. transcribeAudioWithGemini rejects unsupported audio MIME types and empt
     (err: unknown) => err instanceof GeminiServiceError && err.statusCode === 400 && err.code === "EMPTY_AUDIO"
   );
 });
+
+test("7. voiceAssist and chatWithGemini fall back cleanly to Guardian Safety Advisor when Gemini encounters errors", async () => {
+  const voiceRes = await voiceAssist({
+    transcript: "Should I click this lucky draw link?",
+    voiceLang: "en",
+    provider: "gemini",
+  });
+  assert.ok(voiceRes.reply.length > 0);
+  assert.ok(voiceRes.spokenReply.length > 0);
+  assert.equal(voiceRes.languageCode, "en");
+
+  const chatRes = await chatWithGemini({
+    history: [],
+    message: "Should I share OTP?",
+    signals: [],
+    lang: "en",
+    provider: "gemini",
+  });
+  assert.ok(chatRes.text.length > 0);
+});

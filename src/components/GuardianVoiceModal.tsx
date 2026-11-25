@@ -936,10 +936,30 @@ export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
         {voiceError && (
           <div
             role="alert"
-            className="p-3.5 rounded-xl bg-[#2E1219] border border-[#E87575]/45 text-xs text-[#E87575] flex items-start gap-2"
+            className="p-3.5 rounded-xl bg-[#2E1219] border border-[#E87575]/45 text-xs text-[#E87575] space-y-2"
           >
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{voiceError}</span>
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{voiceError}</span>
+            </div>
+            {aiProvider === "gemini" && (
+              <div className="flex flex-wrap gap-2 pl-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeProvider("guardian");
+                    setVoiceError(null);
+                    setMicState("ready");
+                    if (displayedInputValue.trim()) {
+                      void submitVoiceQuery();
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-[#0B2825] border border-[#43C6A5]/45 text-[#43C6A5] text-[11px] font-semibold cursor-pointer hover:bg-[#0B2825]/80"
+                >
+                  {uiLang === "hi" ? "गार्जियन सलाहकार से पूछें" : "Try Guardian Advisor"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
