@@ -128,14 +128,7 @@ function getAiClient(): GoogleGenAI {
       "GEMINI_KEY_MISSING"
     );
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
+  return new GoogleGenAI({ apiKey });
 }
 
 function extractRawStatusAndMessage(err: unknown): { status?: number; message: string } {
@@ -177,10 +170,10 @@ export function mapGeminiError(err: unknown): GeminiServiceError {
       "GEMINI_AUTH_ERROR"
     );
   }
-  if (status === 404 || lower.includes("model") && (lower.includes("not found") || lower.includes("unsupported"))) {
+  if (status === 404 || (lower.includes("model") && (lower.includes("not found") || lower.includes("unsupported")))) {
     return new GeminiServiceError(
-      "The configured Gemini model is currently unavailable for this project.",
-      502,
+      "Gemini AI service is temporarily unavailable. Switched to Guardian Advisor.",
+      503,
       "GEMINI_MODEL_UNAVAILABLE"
     );
   }
@@ -329,7 +322,7 @@ export function detectVoiceNavigationIntent(transcript: string): VoiceNavTarget 
   return null;
 }
 
-const LOCAL_NAV_CONFIRM: Record<VoiceLangCode, Record<Exclude<VoiceNavTarget, null>, string>> = {
+export const LOCAL_NAV_CONFIRM: Record<VoiceLangCode, Record<Exclude<VoiceNavTarget, null>, string>> = {
   en: {
     overview: "Opening your Guardian Dashboard overview.",
     scam_qr: "Opening QR & Scam Message Check.",
@@ -1041,70 +1034,104 @@ export async function transcribeAudioWithGemini(params: {
   }
 
   const vLang = normalizeVoiceLang(params.voiceLang);
-  const ai = getAiClient();
-  const langHint =
-    vLang === "hi"
-      ? "Expected language: Hindi (Devanagari) or Hinglish."
-      : vLang === "hinglish"
-        ? "Expected language: Hinglish (Hindi/English mix)."
-        : `Expected language hint: ${LANGUAGE_INSTRUCTIONS[vLang]}.`;
-
-  const response = await generateContentWithModelFallback(
-    ai,
-    GEMINI_TRANSCRIBE_MODEL,
-    {
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: cleanMime,
-              data: params.base64Audio,
-            },
-          },
-          {
-            text: `Transcribe the spoken audio accurately into plain text only (no commentary, markdown, or timestamps). ${langHint}`,
-          },
-        ],
-      },
-    },
-    { timeoutMs: 22_000, maxRetries: 1 }
-  );
-
-  const transcript = (response.text || "").trim();
-  if (!transcript) {
+  if (!isGeminiConfigured()) {
     throw new GeminiServiceError(
-      "Could not detect clear speech in the recording. Please speak closer to the microphone and try again.",
-      422,
-      "NO_SPEECH_DETECTED"
+      "Audio transcription requires GEMINI_API_KEY. Please use browser speech recognition or type your question below.",
+      503,
+      "GEMINI_KEY_MISSING"
     );
   }
 
-  return { transcript, languageCode: vLang };
+  try {
+    const ai = getAiClient();
+    const langHint =
+      vLang === "hi"
+        ? "Expected language: Hindi (Devanagari) or Hinglish."
+        : vLang === "hinglish"
+          ? "Expected language: Hinglish (Hindi/English mix)."
+          : `Expected language hint: ${LANGUAGE_INSTRUCTIONS[vLang]}.`;
+
+    const response = await generateContentWithModelFallback(
+      ai,
+      GEMINI_TRANSCRIBE_MODEL,
+      {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  mimeType: cleanMime,
+                  data: params.base64Audio,
+                },
+              },
+              {
+                text: `Transcribe the spoken audio accurately into plain text only (no commentary, markdown, or timestamps). ${langHint}`,
+              },
+            ],
+          },
+        ],
+      },
+      { timeoutMs: 22_000, maxRetries: 1 }
+    );
+
+    const transcript = (response.text || "").trim();
+    if (!transcript) {
+      throw new GeminiServiceError(
+        "Could not detect clear speech in the recording. Please speak closer to the microphone and try again.",
+        422,
+        "NO_SPEECH_DETECTED"
+      );
+    }
+
+    return { transcript, languageCode: vLang };
+  } catch (err) {
+    if (
+      err instanceof GeminiServiceError &&
+      (err.code === "EMPTY_AUDIO" || err.code === "UNSUPPORTED_AUDIO_MIME" || err.code === "NO_SPEECH_DETECTED")
+    ) {
+      throw err;
+    }
+    console.warn("[transcribeAudioWithGemini] Failed to transcribe audio:", err);
+    throw new GeminiServiceError(
+      "Audio transcription is currently unavailable. Please type your message or use browser speech.",
+      422,
+      "TRANSCRIPTION_UNAVAILABLE"
+    );
+  }
 }
 
 export async function extractScreenshotTextWithGemini(params: {
   base64Data: string;
   mimeType: string;
 }): Promise<{ extractedText: string }> {
-  const ai = getAiClient();
-  const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: params.mimeType,
-            data: params.base64Data,
+  if (!isGeminiConfigured()) {
+    return { extractedText: "" };
+  }
+  try {
+    const ai = getAiClient();
+    const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: params.mimeType,
+              data: params.base64Data,
+            },
           },
-        },
-        {
-          text: "Transcribe all visible SMS, WhatsApp, or payment alert text from this screenshot accurately. Return only the extracted message text without extra commentary.",
-        },
-      ],
-    },
-  });
-  return {
-    extractedText: (response.text || "").trim(),
-  };
+          {
+            text: "Transcribe all visible SMS, WhatsApp, or payment alert text from this screenshot accurately. Return only the extracted message text without extra commentary.",
+          },
+        ],
+      },
+    });
+    return {
+      extractedText: (response.text || "").trim(),
+    };
+  } catch (err) {
+    console.warn("[extractScreenshotTextWithGemini] Failed to extract text:", err);
+    return { extractedText: "" };
+  }
 }
 
 export function generateGuardianLocalParentsGuidance(params: {
@@ -1127,20 +1154,22 @@ export async function generateParentsAiGuidance(params: {
   lang: string;
   provider?: AiProviderId;
 }): Promise<string> {
-  if (params.provider === "guardian") {
+  if (params.provider === "guardian" || !isGeminiConfigured()) {
     return generateGuardianLocalParentsGuidance(params);
   }
-  const ai = getAiClient();
-  const vLang = normalizeVoiceLang(params.lang);
-  const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
-  const response = await withGeminiTimeoutAndRetry(() =>
-    ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
+  try {
+    const ai = getAiClient();
+    const vLang = normalizeVoiceLang(params.lang);
+    const langLabel = LANGUAGE_INSTRUCTIONS[vLang];
+    const response = await generateContentWithModelFallback(ai, GEMINI_TEXT_MODEL, {
       contents: `Tool: ${params.toolKey}\nFamily context: ${params.contextSummary}\nRequest: ${redactSensitive(params.prompt)}`,
       config: {
         systemInstruction: `You are Parents AI, a calm family organization, caregiving, and household budgeting assistant. Reply in ${langLabel}. Be structured, warm, and concise. Never ask for bank passwords, PINs, OTPs, or card numbers.`,
       },
-    })
-  );
-  return (response.text || "").trim() || "Here is a structured plan you can review with your family.";
+    });
+    return (response.text || "").trim() || generateGuardianLocalParentsGuidance(params);
+  } catch (err) {
+    console.warn("[generateParentsAiGuidance] Failed, using local fallback:", err);
+    return generateGuardianLocalParentsGuidance(params);
+  }
 }

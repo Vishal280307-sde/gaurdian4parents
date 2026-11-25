@@ -30,12 +30,17 @@ import {
 } from "./server/security.ts";
 import {
   chatWithGemini,
+  detectVoiceNavigationIntent,
+  explainRiskLocally,
   explainRiskWithGemini,
   extractScreenshotTextWithGemini,
   GEMINI_TEXT_MODEL,
   GEMINI_TRANSCRIBE_MODEL,
+  guardianSafetyAdvisorChat,
   isGeminiConfigured,
+  LOCAL_NAV_CONFIRM,
   mapGeminiError,
+  normalizeVoiceLang,
   redactSensitive,
   transcribeAudioWithGemini,
   voiceAssist,
@@ -3242,8 +3247,22 @@ export function createApp() {
         });
         res.json(result);
       } catch (err) {
-        const mapped = mapGeminiError(err);
-        res.status(mapped.statusCode).json({ error: mapped.message, code: mapped.code });
+        console.warn("[/api/ai/explain] Failed, using local explanation fallback:", err);
+        const fallback = explainRiskLocally({
+          text: String(req.body?.text || ""),
+          signals: Array.isArray(req.body?.signals) ? req.body.signals : [],
+          level: String(req.body?.level || "LOW"),
+          lang: String(req.body?.voiceLang || req.body?.lang || "en"),
+          contextType: String(req.body?.contextType || "message"),
+          score: typeof req.body?.score === "number" ? req.body.score : undefined,
+          riskLevel: typeof req.body?.riskLevel === "string" ? req.body.riskLevel : undefined,
+          verificationStatus: typeof req.body?.verificationStatus === "string" ? req.body.verificationStatus : undefined,
+          indicators: Array.isArray(req.body?.indicators) ? req.body.indicators : undefined,
+          sourcesUnavailable: Array.isArray(req.body?.sourcesUnavailable) ? req.body.sourcesUnavailable : undefined,
+          findings: Array.isArray(req.body?.findings) ? req.body.findings : undefined,
+          sourceChecks: Array.isArray(req.body?.sourceChecks) ? req.body.sourceChecks : undefined,
+        });
+        res.json(fallback);
       }
     })
   );
@@ -3281,8 +3300,20 @@ export function createApp() {
           res.status(400).json({ error: err.message, code: "CREDENTIAL_REJECTED" });
           return;
         }
-        const mapped = mapGeminiError(err);
-        res.status(mapped.statusCode).json({ error: mapped.message, code: mapped.code });
+        console.warn("[/api/ai/chat] Falling back to Guardian Safety Advisor:", err);
+        const vLang = normalizeVoiceLang(String(req.body?.voiceLang || req.body?.lang || "en"), message);
+        const localNav = detectVoiceNavigationIntent(message);
+        const fallback = {
+          text: guardianSafetyAdvisorChat({
+            message,
+            signals: Array.isArray(req.body?.signals) ? req.body.signals : [],
+            lang: vLang,
+            guardianContext: req.body?.guardianContext,
+          }),
+          providerUsed: "guardian" as const,
+          navigateTo: localNav,
+        };
+        res.json(fallback);
       }
     })
   );
@@ -3321,8 +3352,25 @@ export function createApp() {
           res.status(400).json({ error: err.message, code: "CREDENTIAL_REJECTED" });
           return;
         }
-        const mapped = mapGeminiError(err);
-        res.status(mapped.statusCode).json({ error: mapped.message, code: mapped.code });
+        console.warn("[/api/ai/voice] Falling back to Guardian Safety Advisor:", err);
+        const vLang = normalizeVoiceLang(voiceLang, transcript);
+        const localNav = detectVoiceNavigationIntent(transcript);
+        const navText = localNav ? LOCAL_NAV_CONFIRM[vLang][localNav] : "";
+        const fallbackText = localNav
+          ? navText
+          : guardianSafetyAdvisorChat({
+              message: transcript,
+              signals: Array.isArray(req.body?.signals) ? req.body.signals : [],
+              lang: vLang,
+              guardianContext: req.body?.guardianContext,
+            });
+        res.json({
+          reply: fallbackText,
+          spokenReply: fallbackText,
+          navigateTo: localNav,
+          providerUsed: "guardian",
+          languageCode: vLang,
+        });
       }
     })
   );

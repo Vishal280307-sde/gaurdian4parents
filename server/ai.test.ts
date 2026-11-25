@@ -61,6 +61,10 @@ test("2. mapGeminiError cleanly converts raw @google/genai 503/429/auth/timeout/
 
   const custom = new GeminiServiceError("Custom error", 422, "NO_SPEECH_DETECTED");
   assert.equal(mapGeminiError(custom), custom);
+
+  const errModel = mapGeminiError(new Error("models/gemini-1.5-flash is not found"));
+  assert.equal(errModel.statusCode, 503);
+  assert.equal(errModel.code, "GEMINI_MODEL_UNAVAILABLE");
 });
 
 test("3. buildGuardianContextBlock redacts PII and embeds deterministic scan scores without fabricating fields", () => {

@@ -583,6 +583,54 @@ export const GuardianVoiceModal: React.FC<GuardianVoiceModalProps> = ({
         onNavigateTarget(res.navigateTo);
       }
     } catch (err) {
+      if (aiProvider === "gemini") {
+        onChangeProvider("guardian");
+        try {
+          const res = await apiFetch<{
+            reply: string;
+            spokenReply: string;
+            navigateTo: VoiceNavTarget;
+            providerUsed: AiProviderId;
+            languageCode: VoiceLangCode;
+          }>("/api/ai/voice", {
+            method: "POST",
+            body: JSON.stringify({
+              transcript: queryText,
+              voiceLang,
+              provider: "guardian",
+              history: [...history, userMsg]
+                .slice(-12)
+                .map((h) => ({ role: h.role, text: h.text })),
+              guardianContext: intelContext || undefined,
+            }),
+          });
+
+          const aiMsg: UnifiedChatMessage = {
+            id: `v-a-${Date.now() + 1}`,
+            role: "assistant",
+            text: res.reply,
+            spokenText: res.spokenReply || res.reply,
+            navigateTo: res.navigateTo,
+            providerUsed: res.providerUsed,
+            timestamp: Date.now(),
+          };
+
+          if (onAppendUnifiedExchange) {
+            onAppendUnifiedExchange(userMsg, aiMsg);
+          } else {
+            setLocalHistory((prev) => [...prev, aiMsg]);
+          }
+
+          setMicState("ready");
+          speakText(aiMsg.spokenText || aiMsg.text, aiMsg.id);
+          if (res.navigateTo) {
+            onNavigateTarget(res.navigateTo);
+          }
+          return;
+        } catch {
+          // continue to regular error fallback
+        }
+      }
       const errMsg = err instanceof Error ? err.message : "Voice assistant request failed.";
       setVoiceError(errMsg);
       setMicState("error");

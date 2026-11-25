@@ -399,6 +399,36 @@ export default function App() {
       };
       setAiChatMessages((prev) => [...prev, aiMsg]);
     } catch (err) {
+      if (chosenProvider === "gemini") {
+        try {
+          const res = await apiFetch<{ text: string; providerUsed?: AiProviderId }>("/api/ai/chat", {
+            method: "POST",
+            body: JSON.stringify({
+              message: prompt,
+              history: historyForApi,
+              lang,
+              voiceLang,
+              provider: "guardian",
+              guardianContext: activeContextPayload,
+            }),
+          });
+          const replyText = (res.text || "").trim();
+          if (replyText) {
+            const aiMsg: UnifiedChatMessage = {
+              id: `c-a-${Date.now() + 1}`,
+              role: "assistant",
+              text: replyText,
+              providerUsed: "guardian",
+              timestamp: Date.now(),
+            };
+            setAiChatMessages((prev) => [...prev, aiMsg]);
+            setAiProvider("guardian");
+            return;
+          }
+        } catch {
+          // continue to regular error display
+        }
+      }
       const msg =
         err instanceof Error
           ? err.message
